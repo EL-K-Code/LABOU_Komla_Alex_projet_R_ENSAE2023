@@ -1,1 +1,1 @@
-# LABOU_Komla_Alex_projet_R_ENSAE2023
+Voici le lien de notre application Shiny permettant de représenter quelques événements pour quelques pays africains : https://alexkomla.shinyapps.io/IGIT/
