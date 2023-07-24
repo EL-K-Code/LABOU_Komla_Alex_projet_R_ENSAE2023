@@ -1,0 +1,810 @@
+---
+output:
+  pdf_document:
+  keep_tex: yes
+  fig_caption: yes
+  toc: yes
+  toc_depth: 4
+  number_sections: yes
+header-includes: 
+  - \usepackage{pdfpages}
+  - \usepackage{graphicx}
+---
+
+```{=tex}
+\includepdf{PDG.pdf}
+\setcounter{tocdepth}{4}        
+\renewcommand{\contentsname}{\textcolor{blue}{Table des Matières}}
+```
+\textcolor{black}{\tableofcontents} \newpage
+
+```{r setup}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, error = FALSE,message = FALSE)
+```
+
+```{r}
+library(gtsummary)
+library(janitor)
+library(dplyr)
+library(gt)
+library(ggplot2)
+library(sf)
+library(leaflet)
+library(mapview)
+library(htmlwidgets)
+library(webshot)
+library(mapview)
+library(readxl)
+library(knitr)
+library(lubridate)
+library(gridExtra)
+library(ggExtra)
+```
+
+# 1. Partie 1
+
+## 1.1. Préparation des données
+
+### 1.1.1. Importation et mise en forme
+
+#### 1.1.1.1. Importation de la base
+
+```{r}
+library(readxl)
+getwd()
+projet <- read_excel("Base_Partie 1.xlsx")
+```
+
+#### 1.1.1.2. Sélection des variables mentionnées
+
+La base elle-même contient déjà les variables à sélectionner. Ainsi, il n'est plus vraiment nécessaire d'extraire dans une nouvelle base.
+
+#### 1.1.1.3. Tableau des valeurs manquantes par base
+
+```{r}
+# Charger la bibliothèque janitor
+
+# Calculer le nombre de valeurs manquantes par colonne
+nb_valeurs_manquantes <- colSums(is.na(projet))
+
+# Calculer le pourcentage de valeurs manquantes par colonne
+pourcentage_valeurs_manquantes <- colMeans(is.na(projet))
+
+# Créer un data.frame avec les résultats
+resultats <- data.frame(Variable = names(nb_valeurs_manquantes),
+                        Valeurs_manquantes = nb_valeurs_manquantes,
+                        Pourcentage_manquant = pourcentage_valeurs_manquantes)
+
+# Convertir le data.frame en tibble avec janitor
+tableau <- as_tibble(resultats)
+
+# Formater uniquement la colonne des pourcentages
+tableau <- tableau %>%
+  adorn_pct_formatting(digits = 1,
+  rounding = "half to even",
+  affix_sign = TRUE,"Pourcentage_manquant")
+
+# Afficher le tableau avec janitor
+tableau %>%gt() %>% tab_header(title =md("**Tableau des valeurs manquantes 
+                                         par variables**"))
+
+
+```
+
+#### 1.1.1.4. Existence de valeurs manquantes pour la variable key
+
+```{r}
+# Filtrer les lignes avec des valeurs manquantes pour "nom_variable"
+lignes_manquantes_key <- projet[is.na(projet$key), ]
+# Afficher les lignes avec des valeurs manquantes pour "nom_variable"
+lignes_manquantes_key
+```
+
+On voit clairement que la variable **key** ne comporte pas de valeurs manquantes. Toutes les clés ont été données.
+
+### 1.1.2. Création de variables
+
+#### 1.1.2.1. Renommage
+
+```{r}
+
+# Créer une liste de correspondances pour les renommages
+correspondances <- list(
+  "region" = "q1",
+  "departement" =  "q2",
+ "sexe" = "q23"
+)
+
+# Renommer les variables dans la base de données
+projet <- projet %>% rename(!!!correspondances)
+
+```
+
+#### 1.1.2.2. Création de variables sexe_2
+
+```{r}
+#Si le la condition est vérifiée 1 sinon 0
+projet <- projet %>% mutate(sexe_2 = if_else(sexe =='Femme', 1,0))
+```
+
+#### 1.1.2.3. Création du dataframe langues
+
+```{r}
+#On extraie key et toutes les variables commençant par q24a_
+langues <- projet %>% select("key",starts_with("q24a_"))
+```
+
+#### 1.1.2.4. Création de la variable langue
+
+```{r}
+#Ici on fait la somme des variables commençant par q24_a ce qui correspond
+#                   aux langues
+langues <- langues%>%rowwise()%>% mutate(langue = sum(c_across(cols = 
+                                                      starts_with("q24a_"))))
+```
+
+#### 1.1.2.5. Sélection de langue et key
+
+```{r}
+langues <- langues%>%select(c("key","langue"))
+```
+
+#### 1.1.2.6. Mergeons les deux dataframe
+
+```{r}
+projet <- merge(projet,langues,by = 'key')
+```
+
+## 1.2. Analyses Descriptives
+
+Crééons ici une variable filière pour faire simple en vue de faciliter les croisements.
+
+```{r}
+projet <- projet %>% mutate(filiere = if_else(filiere_1 ==1, 
+                  "Arachide",if_else(filiere_2 ==1, 
+                  "Anarchade",if_else(filiere_3 ==1, 
+                  "Mangue",if_else(filiere_4 ==1,"Riz","")))))
+# On crée là le nombre de filière pour chaque PME en faisant la somme des 
+#           variables filières
+projet <- projet %>% mutate(nb_filiere = filiere_1 + filiere_2 + filiere_3 + filiere_4)
+
+# On affiche la répartiton des PME par nbre de filière avec gtsummary
+tableau_1 <- projet["nb_filiere"]%>%
+  tbl_summary(label = nb_filiere ~ "Nombre de filière",
+  )
+tableau_1
+```
+
+Une analyse rapide nous a permis de remarquer d'abord que certains entreprises sont dans plusieurs filière à la fois. En effet 79 sont celles qui sont dans au moins une filière. L'analyse approfondie nous révèle que 59 d'entre elles sont dans deux ilières et une seule est dans quatre filières.
+
+```{r}
+                            ## Eliminer les espaces
+
+theme_gtsummary_compact(set_theme = TRUE, font_size = NULL)
+                             ## Format de la sortie
+
+theme_gtsummary_printer(
+  print_engine = "flextable",  #c("gt", "kable", "kable_extra", "flextable", 
+                               #"huxtable", "tibble"),
+  set_theme = TRUE
+)
+
+        ## CRÉONS UNE FONCTION QUI NOUS FACILITE LA CRÉATION DES TABLEAU
+
+#Vu qu'on aura a créer plusieurs tableaux sous ce format, au lieu de recopier les
+#mm choses,on a préféré simplifier en définissant une fonction
+
+tabl_filiere = function(base_donnee, num_var_filiere_, nom_filiere){
+  
+                          ### TITRE DE LA COLONNE
+  
+  nom <- paste(paste("", as.character(nom_filiere), sep = ""), "", sep = "")
+  
+                           ### TABLEAU GTSUMMARY
+  
+  tableau <- base_donnee %>%
+  dplyr::select(sexe_2, sexe, q25, q12, q81, names(base_donnee[num_var_filiere_]) 
+                ) %>%
+  gtsummary::tbl_summary(
+    ## paramètres de tbl_summary
+    include = c(names(base_donnee[num_var_filiere_]), sexe_2,q81, q25, q12),
+    by = names(base_donnee[num_var_filiere_]),## variables qui forme les groupes
+    label = list(sexe_2 ~ "Responsable femme", 
+                 q25 ~ "Niveau d'instruction du responsable", 
+                 q12 ~ "statut juridique de l'entreprise", 
+                 q81 ~ "Propriétaire / locataire"
+                 ), ## labélisation des variables dans le tableau
+    percent = "column", ## Type de pourcentage affichés dans le tableau 
+    digits = ~2, ## nombre de chiffre après la virgule pour les résultats
+    statistic = c(all_categorical(), all_interaction()) ~ "{p}% ({n})", 
+    type = list(sexe_2 ~ "dichotomous"), ## modifier et préciser comment il 
+                                            ## faut considérer la variable SEXE_2
+    missing = "ifany", ## afficher les stat sur les valeurs manquantes
+    missing_text = "Manquants", ## formatage et nomination de "valeur manquante"
+    ) %>% 
+    ## ajouter les statistiques sur la base totale (non par groupe)
+    add_overall() %>%
+    ## mise en forme des variables et des modalités
+    bold_labels() %>% 
+    italicize_levels() %>%
+    ## mise en forme de l'entête du tableau
+    modify_header(
+      list(
+        label ~ "Variable",
+        stat_0 = "TOTAL (n={N})",
+        all_stat_cols(stat_0 = FALSE) ~ "{level} (n={n}, {style_percent(p)}%)",
+        stat_2 = paste(nom,", (n={n}, {style_percent(p)}%)", sep = "")
+      )
+     ) %>% 
+    modify_column_hide(c(stat_0,stat_1))
+  return(tableau)
+}
+
+# On veut ici créer les tableaux pour chaque filière et ensuite les merger
+#              pour avoir un seul tableau
+
+# STAT. POUR LA FILIÈRE ARACHIDE
+
+tabl_fil_ara <- tabl_filiere(projet, which(names(projet) == "filiere_1"), "Arachide")
+# STAT. POUR LA FILIÈRE ANACARDE
+
+tabl_fil_ana <- tabl_filiere(projet, which(names(projet) == "filiere_2"), "Anacarde")
+# STAT. POUR LA FILIÈRE MANGUE
+
+tabl_fil_man <- tabl_filiere(projet, which(names(projet) == "filiere_3"), "Mangue")
+# STAT. POUR LA FILIÈRE RIZ
+
+tabl_fil_riz <- tabl_filiere(projet, which(names(projet) == "filiere_4"), "Riz")
+
+# tableau aggrégé
+tabl_filiere_ <- gtsummary::tbl_merge(
+  list(tabl_fil_ara, tabl_fil_ana, tabl_fil_man, tabl_fil_riz),
+  tab_spanner =  c("Arachide", "Anarchade","Mangue","Riz")) 
+## intitulé des groupes de tableau associés
+
+tabl_filiere_
+
+```
+
+### 1.2.1. Sexe du dirigeant des PME
+
+Le tableau ci-dessus nous montre que la plupart des PME sont dirigés par des femmes. En effet, pratiquement 7 dirigeant sur 10 sont de sexe féminin.
+
+Le constat est le même à l'intérieur de chaque filière où les femmes sont pour la plupart les dirigeantes. C'est encore plus alarmant dans la filière **arachide** où près de 9 dirigeants sur 10 sont des femmes.
+
+### 1.2.2. Niveau d'instruction des PME
+
+L'analyse selon le niveau d'instruction des dirigeants nous montre que la plupart des PME (32%) ont des dirigeants qui n'ont aucun niveau. Cependant, nombreux sont aussi des PME dont les dirigeants ont un niveau secondaire. Les PME dirigés par des personnes ayant un niveau supérieur sont pour leur part les moins représentées (16%).
+
+```{r}
+# On a voulu spécialement pour la variable niveau d'instruction créer un digramme
+#                     circulaire
+
+# Créer un sous-ensemble de données avec la variable "niveau d'instruction"
+donnees_niveau <- projet %>%
+  select(q25)
+
+# Compter le nombre d'occurrences de chaque niveau d'instruction
+comptage_niveau <- count(donnees_niveau, q25)
+
+# Calculer les pourcentages
+comptage_niveau <- comptage_niveau %>%
+  mutate(pourcentage = n / sum(n) * 100)
+
+# Créer le diagramme donut
+diagramme_donut <- ggplot(comptage_niveau, aes(x = "", y = n, fill = q25)) +
+  geom_bar(width = 1, stat = "identity") +
+  coord_polar("y", start = 0) +
+  labs(fill = "Niveau d'instruction") +
+  geom_text(aes(label = paste0(round(pourcentage), "%")),
+            position = position_stack(vjust = 0.5)) +
+  labs(title = "Répartition suivant le niveau d'instruction") +
+  theme_void()+
+  theme(plot.title = element_text(hjust = 0.5))
+
+# Afficher le diagramme donut
+diagramme_donut
+```
+
+En poussant un peu l'analyse à l'intérieur de chaque filière, l'on remarque que la tendance n'est pas la même que dans l'ensemble. En effet, s'agissant de la filière **anarchade** par exemple, les PME ont pour la plupart des dirigeants de niveau primaire ou supérieur. Cependant il faut noter que ce groupe parait assez homogèe dans la répartition suivant le niveau d'instruction du dirigeant. Quant à la filière **arachide**, on retrouve peu de PME dirigées par des individus de niveau supérieur (7,41%) avec la plupart ayant des dirigeants de niveau secondaire ou encore sans niveau.
+
+Ceci peut nous amener à penser que le niveau du dirigeant infiuence la filière de sa PME. Le test de Chi-2 réalisée à cet effet nous donne une p-value de 4,660033e-08. Ainsi les résultats du test de Chi-2 viennent confirmer cette liaison existante entre les deux variables.
+
+### 1.2.3. Statut juridique des PME
+
+La plupart des PME sont dans des GIE ou exercent dans le secteur informel. Le constat est le même par filière où les GIE dominent.
+
+### 1.2.4. Statut du dirigeant
+
+Les dirigeants des PME sont en majorité des propriétaires, environ 90%. Le constat est le même quelle que soit la filière de la PME.
+
+### 1.2.5. Statut juridique, Niveau d'instruction, Propriétaire/Locataire et Sexe
+
+```{r}
+
+theme_gtsummary_compact(set_theme = TRUE, font_size = NULL)
+      #Créons une fonction pour les tableaux croisés par filière et sexe
+
+# Ici aussi pour faire croiser par filière et par sexe, nous serons emmenés à 
+# faire des tableaux gtsummary avec strate. Pour cela, nous avons décidé de définir
+# une fonction qui facilitera les choses et l'appliquer à chauqe filière. L'objectif
+# est de merger en lignes le tableau créer ppur chaque variable par filière et ensuite
+#                    merger en colonne pour les filières. 
+
+tabl_fil =function(base_donnee, num_var_filiere_, nom_filiere,lab_var,num_var){
+
+                         ### TABLEAU CROISE
+  
+  tableau <- base_donnee %>%
+  dplyr::select(sexe, q25, q12, q81, names(base_donnee[num_var_filiere_]) 
+                ) %>%
+  gtsummary::tbl_strata(
+    strata = names(base_donnee[num_var_filiere_]),
+    .tbl_fun = ~ .x %>%
+      gtsummary::tbl_cross(
+        row = names(base_donnee[num_var]),
+        col = sexe,
+        percent = "cell",
+        margin = NULL,
+        #statistic = ~ "{p}% ({n})",
+        #digits = ~ 2,
+        label = list(names(base_donnee[num_var]) ~ as.character(lab_var),
+                     sexe ~ "sexe du responsable")
+        ) %>% add_p() %>%
+      bold_labels() %>%
+      italicize_levels(),
+    
+    ## préciser comment combiner les tableaux de chaque groupe. Par défaut, 
+    ## il combine avec "tbl_merge"
+    .combine_with = "tbl_merge", 
+    .header = "{strata}"
+    )%>%
+    ## mise en forme de l'entête du tableau
+   modify_header(
+      list(
+        all_stat_cols(stat_0 = FALSE) ~ "**{level}** (n={n}, {style_percent(p)}%)"
+      )
+     ) %>% 
+    modify_column_hide(c(stat_1_1,stat_2_1,p.value_1))
+  return(tableau)
+}
+
+tab_prop_1 <- tabl_fil(projet,23,"Arachide","Propriétaire/Locataire",
+                       which(names(projet)=="q81"))
+tab_niv_1 <- tabl_fil(projet,23,"Arachide","Niveau d'instruction",
+                      which(names(projet)=="q25"))
+tab_stat_1 <- tabl_fil(projet,23,"Arachide","Statut juridique",
+                       which(names(projet)=="q81"))
+
+tab_fil_1 <- gtsummary::tbl_stack(list(tab_prop_1, tab_niv_1,tab_stat_1))
+
+
+tab_prop_2 <- tabl_fil(projet,24,"Anarchade","Propriétaire/Locataire",
+                       which(names(projet)=="q81"))
+tab_niv_2 <- tabl_fil(projet,24,"Anarchade","Niveau d'instruction",
+                      which(names(projet)=="q25"))
+tab_stat_2 <- tabl_fil(projet,24,"Anarchade","Statut juridique",
+                       which(names(projet)=="q81"))
+
+tab_fil_2 <- gtsummary::tbl_stack(list(tab_prop_2, tab_niv_2,tab_stat_2))
+
+
+tab_prop_3 <- tabl_fil(projet,25,"Arachide","Propriétaire/Locataire",
+                       which(names(projet)=="q81"))
+tab_niv_3 <- tabl_fil(projet,25,"Arachide","Niveau d'instruction",
+                      which(names(projet)=="q25"))
+tab_stat_3 <- tabl_fil(projet,25,"Arachide","Statut juridique",
+                       which(names(projet)=="q81"))
+
+tab_fil_3 <- gtsummary::tbl_stack(list(tab_prop_3, tab_niv_3,tab_stat_3))
+
+tab_prop_4 <- tabl_fil(projet,26,"Arachide","Propriétaire/Locataire",
+                       which(names(projet)=="q81"))
+tab_niv_4 <- tabl_fil(projet,26,"Arachide","Niveau d'instruction",
+                      which(names(projet)=="q25"))
+tab_stat_4 <- tabl_fil(projet,26,"Arachide","Statut juridique",
+                       which(names(projet)=="q81"))
+
+tab_fil_4 <- gtsummary::tbl_stack(list(tab_prop_4, tab_niv_4,tab_stat_4))
+
+tab_crois <- gtsummary::tbl_merge(
+  list(tab_fil_1,tab_fil_2,tab_fil_3,tab_fil_4),
+  tab_spanner = c("**Arachide**", "**Anacarde**","**Mangue**","**Riz**") 
+  ## intitulé des groupes de tableau associés
+)
+tab_crois
+
+
+
+```
+
+### 1.2.6. Statistiques descriptives de notre choix
+
+#### 1.2.6.1. Type de filière par région
+
+La spécialisation de nos PME peut dépendre de la région de localisation de ces dernières. Il ressort de nos analyses que dans la filière **Arachide** se retrouve plus dans les régions de Thiès et Diourbel. Par contre les PME de la filière **Anacarde** sont plus trouvées dans les régions Fatick et Zigunichor. Quant à la filière **Mangue** (respectivement **Riz)**, leur PME sont essentiellement dans les régions de Thiès et Saint-Louis (respectivement Thiès et Ziguinchor).
+
+```{r}
+theme_gtsummary_compact(set_theme = TRUE, font_size = NULL)
+
+## Format de la sortie
+theme_gtsummary_printer(
+  print_engine = "flextable",  
+  #c("gt", "kable", "kable_extra", "flextable", "huxtable", "tibble"),
+  set_theme = TRUE
+)
+               # Créons le tableau 1 pour arachide
+
+tbl_1 <- projet %>%select(region,filiere_1) %>%
+  gtsummary::tbl_summary(
+    include = c(region,filiere_1),
+    by = filiere_1
+  ,label = list(region ~ "Région"))%>%
+  add_overall()%>%
+  bold_labels() %>%
+  italicize_levels()%>%modify_column_hide(c(stat_0,stat_1))
+
+               # Créons le tableau 2 pour anacharde
+
+tbl_2 <- projet %>%select(region,filiere_2) %>%
+  gtsummary::tbl_summary(
+    include = c(region,filiere_2),
+    by = filiere_2
+  ,label = list(region ~ "Région"))%>%
+  add_overall()%>%
+  bold_labels() %>%
+  italicize_levels()%>%modify_column_hide(c(stat_0,stat_1))
+
+               # Créons le tableau 3 pour mangue
+tbl_3 <- projet %>%select(region,filiere_3) %>%
+  gtsummary::tbl_summary(
+    include = c(region,filiere_3),
+    by = filiere_3
+  ,label = list(region ~ "Région"))%>%
+  add_overall()%>%
+  bold_labels() %>%
+  italicize_levels()%>%modify_column_hide(c(stat_0,stat_1))
+
+               # Créons le tableau 4 pour riz
+
+tbl_4 <- projet %>%select(region,filiere_4) %>%
+  gtsummary::tbl_summary(
+    include = c(region,filiere_4),
+    by = filiere_4
+  ,label = list(region ~ "Région"))%>%
+  add_overall()%>%
+  bold_labels() %>%
+  italicize_levels()%>%modify_column_hide(c(stat_0,stat_1))
+
+               #Mergeons les 4 tableaux ci-dessus en un seul tableau
+
+gtsummary::tbl_merge(
+  list(tbl_1,tbl_2,tbl_3,tbl_4),
+  tab_spanner =  c("Arachide", "Anacarde","Mangue","Riz") 
+  ## intitulé des groupes de tableau associés
+)
+```
+
+## 1.3. Un peu de cartographie
+
+### 1.3.1. Transformons le **data. frame** en données géographiques dont l'objet sera nommé **projet_map**
+
+```{r}
+
+projet_map <- st_as_sf(projet, coords = c("gps_menlongitude", "gps_menlatitude"))
+class(projet_map)
+
+```
+
+### 1.3.2. Représentation spatiale des PME suivant le sexe
+
+```{r fig.align="center"}
+
+# Définir les couleurs pour chaque valeur de la colonne "sexe"
+couleurs_sexe <- colorFactor(c("blue", "red"), domain = projet_map$sexe)
+v <- leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(data = projet_map,color = ~couleurs_sexe(sexe))%>% 
+  addLegend(position = "bottomright", 
+  pal = couleurs_sexe, 
+  values = projet_map$sexe, title = "Sexe")
+
+# Une fois la carte leaflet créer vu qu'elle ne mrche que sur le format HTML, nous
+#     allons faire une capture d'écran de celle-ci avec la fonction webshot. 
+
+saveWidget(v, file = "Sexe.html")
+webshot("Sexe.html", "Sexe.png")
+
+```
+
+### 1.3.3. Répartition des PME suivant le niveau d'instruction
+
+```{r fig.align="center"}
+
+
+# Définir les couleurs pour chaque valeur de la colonne "niv d'instruction"
+couleurs_niv <- colorFactor(c("blue", "red","green","yellow"), domain = projet_map$q25)
+t <- leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(data = projet_map,color = ~couleurs_niv(q25))%>% 
+  addLegend(position = "bottomright", 
+  pal = couleurs_niv, 
+  values = projet_map$q25, title = "Niveau d'Instruction")
+
+# Une fois la carte leaflet créer vu qu'elle ne mrche que sur le format HTML, nous
+#     allons faire une capture d'écran de celle-ci avec la fonction webshot. 
+
+saveWidget(t, file = "Niv.html")
+webshot("Niv.html", "Niv.png")
+
+
+
+```
+
+### 1.3.4. Représentation des PME suivant le nombre de filière
+
+```{r fig.align="center"}
+
+# Définir les couleurs pour chaque valeur de la colonne "filiere"
+couleurs_fil <- colorFactor(c("blue", "red","green","yellow"), domain = projet_map$nb_filiere)
+fil <- leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(data = projet_map,color = ~couleurs_fil(nb_filiere))%>% 
+  addLegend(position = "bottomright", 
+  pal = couleurs_fil, 
+  values = projet_map$nb_filiere, title = "Nombre de filière")
+
+# Une fois la carte leaflet créer vu qu'elle ne mrche que sur le format HTML, nous
+#     allons faire une capture d'écran de celle-ci avec la fonction webshot. 
+
+saveWidget(fil, file = "fil.html")
+webshot("fil.html", "fil.png")
+
+```
+
+### 1.3.5. Repartition spatiale des PME suivant que l'entreprise soit desservie par une route bitumée ou pas
+
+```{r fig.align="center"}
+
+# Définir les couleurs pour chaque valeur de la colonne "sexe"
+couleurs_rout <- colorFactor(c("blue", "red"), domain = projet_map$q16)
+rout <- leaflet() %>%
+  addTiles() %>%
+  addCircleMarkers(data = projet_map,color = ~couleurs_rout(q16))%>% 
+  addLegend(position = "bottomright", 
+  pal = couleurs_rout, 
+  values = projet_map$q16, title = "Routes bitumées")
+
+# Une fois la carte leaflet créer vu qu'elle ne mrche que sur le format HTML, nous
+#     allons faire une capture d'écran de celle-ci avec la fonction webshot. 
+
+saveWidget(rout, file = "Rout.html")
+webshot("Rout.html", "Rout.png")
+
+
+```
+
+# 2. Partie 2
+
+## 2.1. Nettoyage et gestion des données
+
+### 2.1.1. Renommage de la colonne
+
+```{r}
+# Importons la base de données
+
+Base_Partie_2 <- read_excel("Base_Partie 2.xlsx", 
+    sheet = "data")
+
+# Renommage de la colonne
+
+Base_Partie_2 <- Base_Partie_2 %>%
+  rename("destination" = "country_destination")%>%
+ mutate(destination = ifelse(destination < 0, NA, destination))
+```
+
+### 2.1.2. Création d'une nouvelle variable contenant des tranches d'âge de 5 ans en utilisant la variable "age"
+
+```{r}
+
+# Création d'une nouvelle variable contenant des tranches d’âge de 5 ans 
+#                      en utilisant la variable “age”
+
+#D'abord l'exploration de la base nous a permi de voir un age de 999 que nous allons
+#                   imputer par l'arrondi de la moyenne
+
+Base_Partie_2$age [Base_Partie_2$age == 999] <- round(
+  mean(Base_Partie_2$age[Base_Partie_2$age != 999], na.rm = TRUE)
+)
+
+# Nous pouvons alors créer nos classes
+
+intervalle <- 5
+limites_classes <- seq(min(Base_Partie_2$age), max(Base_Partie_2$age), by = intervalle)
+
+          # Créer les classes d'âge en utilisant cut()
+
+Base_Partie_2$classes_age <- cut(Base_Partie_2$age, breaks = 
+      limites_classes, labels = paste0("{",limites_classes
+          [-length(limites_classes)], ";", limites_classes[-1],"{"))
+
+```
+
+### 2.1.3. Création d'une nouvelle variable contenant le nombre d'entretiens réalisés par chaque agent recenseur
+
+```{r}
+# Créer une nouvelle variable contenant le nombre d’entretiens réalisés 
+#                       par chaque agent recenseur.
+Base_Partie_2 <- Base_Partie_2 %>% group_by(enumerator) %>% 
+  mutate(nbre_interview = n()) %>% ungroup()
+```
+
+### 2.1.4. Création d'une nouvelle variable qui affecte aléatoirement chaque répondant à un groupe de traitement (1) ou de controle (0)
+
+```{r}
+# Créer une nouvelle variable qui affecte aléatoirement chaque 
+#   répondant à un groupe de traitement (1) ou de controle (0)
+
+set.seed(123)
+Base_Partie_2 <- Base_Partie_2 %>%
+  mutate(groupe = sample(c(0, 1), size = nrow(Base_Partie_2), 
+                         replace = TRUE))
+
+
+```
+
+### 2.1.5. Fusion
+
+```{r}
+# Fusionner la taille de la population de chaque district (feuille 2) 
+#avec l’ensemble de données (feuille 1) afin que toutes les personnes 
+#interrogées aient une valeur correspondante représentant la taille de la 
+#        population du district dans lequel elles vivent
+
+feuille_2 <- read_excel("Base_Partie 2.xlsx", 
+    sheet = "district")
+
+Base_Partie_2 <- left_join(Base_Partie_2,feuille_2,by = "district")
+
+```
+
+### 2.1.6. Durée et Durée moyenne de l'entretien
+
+```{r}
+#Calculer la durée de l’entretien et indiquer la durée moyenne de l’entretien 
+#                     par enquêteur.
+
+          #Créons d'abord la colonne durée de l'entretien
+
+Base_Partie_2 <- Base_Partie_2 %>%
+  mutate(duree_enquete = interval(starttime, endtime) %>% as.duration())
+
+#           Faisons donc le moyenne que nous mettons dans un nouveau dataframme
+
+Resume <- Base_Partie_2 %>% group_by(enumerator) %>% summarise(
+  Duree_Moyenne = mean(duree_enquete))
+
+```
+
+### 2.1.7. Renommage des variables
+
+```{r}
+
+# Renommez toutes les variables de l’ensemble de données en ajoutant le préfixe “endline_”
+#                               à l’aide d’une boucle
+
+Base_Partie <- Base_Partie_2 %>% rename_all(~paste0("endline_", .))
+
+```
+
+## 2.2. Analyse et visualisation des données
+
+### 2.2.1. Tableau récapitulatif de l'age moyen et d'enfants moyen par district
+
+```{r}
+# Tableau récapitulatif de l'age moyen et d'enfants moyen par district
+
+tab_Mean <- flextable::as_flextable(Base_Partie_2 %>% 
+          group_by(district) %>% summarise(Age_Moyen = mean(age),
+          Enfant_Moyen = mean(children_num)))
+tab_Mean
+```
+
+### 2.2.2. Testons si la différence d'âge entre les sexes est statistiquement significative au niveau de 5 %
+
+```{r}
+# Testons si la différence d’âge entre les sexes est statistiquement significative au 
+#                                  niveau de 5 %.
+
+                    
+                             # Avec l'age 
+
+appli<-Base_Partie_2 %>%
+dplyr::select(sex ,age) %>%
+gtsummary::tbl_summary(
+  by = sex,
+  label = age ~ "Tranche d'age", 
+  percent = "column",
+                    statistic=age~"{mean}")%>% add_n() %>%
+  add_difference() %>%
+  add_overall()%>%as_flex_table()
+appli
+```
+
+La p-value trouvée à cet effet est de 0.051 qui est supérieur à 0.05 ainsi. Donc la différence d'âge entre les sexes n'est pas significative.
+
+### 2.2.3. Nuage de points de l'âge en fonction du nombre d'enfants
+
+```{r}
+# Importons les librairies
+
+# Nous avons ici rprésenté 3 nuages de points avec respectivement, la distribution 
+#       histogramme, densité et boxplot des deux variables. 
+
+p <- ggplot(Base_Partie_2, aes(x=age, y=children_num, color=sex)) +
+      geom_point() +
+      theme(legend.position="none")+
+      labs(x = "Âge", y = "Nombre d'enfants")
+
+p1 <- ggMarginal(p, type="histogram")
+p2 <- ggMarginal(p, type="density")
+p3 <- ggMarginal(p, type="boxplot")
+
+
+grid.arrange(p1, p2,ncol = 2)
+grid.arrange(p3,ncol = 1)
+```
+
+### 2.2.4. Estimation de l'effet de l'appartenance au groupe sur la décision de migrer
+
+```{r}
+library(nnet)
+regm <- multinom(intention ~ groupe ,data = Base_Partie_2)
+tbl <- tbl_regression(regm, exponentiate = TRUE)
+tbl
+
+
+library(GGally)
+ggcoef_multinom(
+  regm,
+  exponentiate = TRUE
+)
+
+library(effects)
+plot(allEffects(regm))
+```
+
+Vu les p-value trouvée, l'on ne peut interpreter les résultats obtenus quand à l'effet de l'appartenance du groupe sur l'intention de migrer.
+
+### 2.2.5. Tableau de regression avec trois modèles
+
+```{r}
+
+# Modèle A : Modèle vide - Effet du traitement sur les intentions
+modele_A <- multinom(intention ~ groupe, data = Base_Partie_2)
+tableau_A <- tbl_regression(modele_A)
+
+# Modèle B : Effet du traitement sur les intentions en tenant compte de l'âge et du sexe
+modele_B <- multinom(intention ~ groupe + age + sex, data = Base_Partie_2)
+tableau_B <- tbl_regression(modele_B)
+
+# Modèle C : Identique au modèle B mais en contrôlant le district
+modele_C <- multinom(intention ~ groupe + age + sex + district, data = Base_Partie_2)
+
+ggcoef_multinom(
+  modele_C,
+  exponentiate = TRUE)
+
+plot(allEffects(modele_C))
+
+
+tableau_C <- tbl_regression(modele_C)
+
+# Création du tableau récapitulatif des résultats des trois modèles
+tableau_final <- tbl_merge(list(tableau_A, tableau_B, tableau_C),
+              tab_spanner = c("Modèle A","Modèle B","Modèle C"))
+
+# Affichage du tableau final
+tableau_final
+
+```
